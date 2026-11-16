@@ -36,8 +36,23 @@ jobs:
           (Get-Content build/_deps/sdl-build/include-config-release/build_config/SDL_build_config.h) -replace '#define SDL_JOYSTICK_GAMEINPUT 1', '/* #undef SDL_JOYSTICK_GAMEINPUT */' | Set-Content build/_deps/sdl-build/include-config-release/build_config/SDL_build_config.h
       
       - name: Build
+        shell: bash
         run: |
-          cmake --build build --config ${{matrix.build_type}}
+          cmake --build build --config ${{matrix.build_type}} 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Report build errors (readable through the checks API)
+        if: failure()
+        shell: bash
+        run: |
+          echo "::error title=failed step::configure=${{ steps.configure.outcome }}"
+          if [ -f build.log ]; then
+            grep -E " error |fatal error|: error" build.log | sort -u | head -45 | while IFS= read -r l; do
+              l="${l//'%'/'%25'}"; echo "::error::${l}"
+            done
+          else
+            echo "::error::no build.log: an earlier step failed"
+          fi
           
       - name: Copy settings
         shell: pwsh
