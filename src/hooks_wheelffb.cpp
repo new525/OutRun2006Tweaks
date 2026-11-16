@@ -416,6 +416,8 @@ namespace
 		if (d.damper) d.damper->Start(1, 0);
 	}
 
+	void LogFailure(const char* what, HRESULT hr);
+
 	void SetCondition(IDirectInputEffect* fx, LONG coefficient)
 	{
 		if (!fx)
@@ -432,11 +434,15 @@ namespace
 		e.rglDirection = dir;
 		e.cbTypeSpecificParams = sizeof cond;
 		e.lpvTypeSpecificParams = &cond;
+		// in place if the driver allows it; else with the restart DirectInput may need (some drivers refuse
+		// DIEP_NORESTART outright)
 		HRESULT hr = fx->SetParameters(&e, DIEP_TYPESPECIFICPARAMS | DIEP_NORESTART);
+		if (FAILED(hr) && hr != DIERR_INPUTLOST && hr != DIERR_NOTACQUIRED && hr != DIERR_NOTEXCLUSIVEACQUIRED)
+			hr = fx->SetParameters(&e, DIEP_TYPESPECIFICPARAMS | DIEP_START);
 		if (hr == DIERR_INPUTLOST || hr == DIERR_NOTACQUIRED || hr == DIERR_NOTEXCLUSIVEACQUIRED)
 			Reacquire();
-		else if (hr == DIERR_EFFECTPLAYING)
-			fx->SetParameters(&e, DIEP_TYPESPECIFICPARAMS);
+		if (FAILED(hr))
+			LogFailure("a spring/damper update", hr);
 	}
 
 	// A pattern step: a constant force for a little longer than a tick (it lapses by itself if the game
@@ -459,6 +465,8 @@ namespace
 		HRESULT hr = d.constant->SetParameters(&e, DIEP_TYPESPECIFICPARAMS | DIEP_DURATION | DIEP_START);
 		if (hr == DIERR_INPUTLOST || hr == DIERR_NOTACQUIRED || hr == DIERR_NOTEXCLUSIVEACQUIRED)
 			Reacquire();
+		if (FAILED(hr))
+			LogFailure("a pattern step", hr);
 	}
 
 	// ---------------------------------------------------------------------------------------------
@@ -470,25 +478,35 @@ namespace
 	bool  s_patternMirror = false;
 	bool  s_raceActive = false;
 
-	// CabinetCtrl_Main: the drive board follows the car from the start of a race until the game
-	// leaves it (the arcade's request modes 0xD/0xF start it; these modes keep it; any other stops it)
+	// CabinetCtrl_Main switches the drive board's following on at the arcade's request modes 0xD/0xF and
+	// keeps it through the race. On PC the player's car only ticks once the race runs, after the start
+	// mode has passed, so here it follows in every mode of a race (the arcade's keep-list and
+	// START/RESTART), else the wheel stays at level 4.
 	void UpdateRaceActive()
 	{
 		const int mode = Game::current_mode ? int(*Game::current_mode) : -1;
+		bool active = false;
 		switch (mode)
 		{
-		case STATE_START:
-		case STATE_RESTART:
-			s_raceActive = true;
-			break;
-		case STATE_SELECTOR: case STATE_SELEXIT: case STATE_WARP: case STATE_GAME: case STATE_GIVEUP:
+		case STATE_START: case STATE_WARP: case STATE_RESTART: case STATE_GAME: case STATE_GIVEUP:
 		case STATE_SMPAUSEMENU: case STATE_GOAL: case STATE_TIMEUP: case STATE_LINK_TIMEUP:
-		case STATE_RESULT: case STATE_CONTINUE: case STATE_ENDING: case STATE_GAMERESET:
+		case STATE_TRYAGAIN: case STATE_OUTRUNMILES:
+			active = true;
 			break;
 		default:
-			s_raceActive = false;
 			break;
 		}
+		if (active != s_raceActive)
+			spdlog::info("WheelFFB: following the car {} (game mode {:#x})", active ? "on" : "off", mode);
+		s_raceActive = active;
+	}
+
+	// a failed effect update, logged the first few times
+	int s_failures = 0;
+	void LogFailure(const char* what, HRESULT hr)
+	{
+		if (s_failures < 8)
+			spdlog::warn("WheelFFB: {} failed ({:#x}){}", what, uint32_t(hr), ++s_failures == 8 ? " (no more of these)" : "");
 	}
 
 	void Tick(EVWORK_CAR* carStruct)
@@ -516,6 +534,7 @@ namespace
 			target = arc.level;
 			if (arc.event >= 0)
 			{
+				spdlog::debug("WheelFFB: event {} -> pattern {}{}", arc.event, PATTERN_OF_EVENT[arc.event], arc.mirror ? " mirrored" : "");
 				s_pattern = PATTERN_OF_EVENT[arc.event];
 				s_step = 1;
 				s_patternMirror = arc.mirror;
@@ -534,6 +553,11 @@ namespace
 		const float master = Settings::WheelFFBStrength / 100.f;
 		const LONG spring = LONG(DI_FFNOMINALMAX * master * (Settings::WheelFFBSpring / 100.f) * (s_shownLevel16 / (15.f * 16.f)));
 		const LONG damper = LONG(DI_FFNOMINALMAX * master * (Settings::WheelFFBDamper / 100.f) * (arc.damping / 2.f));
+		static int s_ticks = 0;
+		if (++s_ticks % 120 == 0)
+			spdlog::debug("WheelFFB: mode {:#x} following {} level {} (shown {:.2f}) spring {} damper {} speed {} slip {}",
+				Game::current_mode ? int(*Game::current_mode) : -1, s_raceActive, arc.level, s_shownLevel16 / 16.f, spring, damper,
+				car ? rd<uint32_t>(car, Car::SpeedKmh) : 0, car ? rd<int16_t>(car, Car::FrontSlipAngle) : 0);
 		if (spring != s_lastSpring) { SetCondition(d.spring, spring); s_lastSpring = spring; }
 		if (damper != s_lastDamper) { SetCondition(d.damper, damper); s_lastDamper = damper; }
 
