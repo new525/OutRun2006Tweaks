@@ -94,8 +94,8 @@ private:
 	std::string bindingName;
 
 	// Wheel setup: a run of prompts, one per action, that replaces each
-	// action's joystick bindings with whatever is pressed. Empty when not
-	// running.
+	// action's joystick bindings with whatever is pressed. The step is -1
+	// when it isn't running.
 	static inline const Selection WheelSetupSteps[] = {
 		{ Vol, int(ADChannel::Steering)      },
 		{ Vol, int(ADChannel::Acceleration)  },

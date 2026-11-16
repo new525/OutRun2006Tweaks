@@ -812,7 +812,7 @@ public:
 		captureBaseline.clear();
 		for (auto* joystick : joysticks)
 		{
-			std::vector<Sint16> axes(std::max(SDL_GetNumJoystickAxes(joystick), 0));
+			std::vector<Sint16> axes((std::max)(SDL_GetNumJoystickAxes(joystick), 0));
 			for (int i = 0; i < int(axes.size()); i++)
 				axes[i] = SDL_GetJoystickAxis(joystick, i);
 			captureBaseline.emplace_back(SDL_GetJoystickID(joystick), std::move(axes));
