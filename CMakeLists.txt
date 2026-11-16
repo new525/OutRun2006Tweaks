@@ -304,6 +304,7 @@ set(outrun2006tweaks_SOURCES
 	"src/hooks_misc.cpp"
 	"src/hooks_textures.cpp"
 	"src/hooks_uiscaling.cpp"
+	"src/hooks_wheelffb.cpp"
 	"src/input_manager.cpp"
 	"src/input_manager.hpp"
 	"src/input_names.hpp"
