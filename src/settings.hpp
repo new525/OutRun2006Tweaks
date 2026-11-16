@@ -63,6 +63,12 @@ namespace Settings
 		// user INI holds nothing but genuine overrides. Returns whether it wrote.
 		virtual bool write(inih::INIReader& ini) const = 0;
 
+		// Whether something read after the shipped INI (the user INI, or the
+		// command line) changed this setting. Shown in the log, since the
+		// shipped INI saying one thing and the game doing another is otherwise
+		// a mystery.
+		virtual bool overrides_base() const = 0;
+
 		// Records the value the game started with, for changed_since_startup.
 		virtual void mark_startup_value() = 0;
 		virtual bool changed_since_startup() const = 0;
@@ -205,6 +211,7 @@ namespace Settings
 		void read(const inih::INIReader& ini) override;
 		void mark_base_value() override { baseValue_ = value_; }
 		bool write(inih::INIReader& ini) const override;
+		bool overrides_base() const override { return !(value_ == baseValue_); }
 
 	private:
 		T value_;

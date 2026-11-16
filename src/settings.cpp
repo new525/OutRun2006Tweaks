@@ -373,7 +373,10 @@ namespace Settings
 			}
 #endif
 
-			spdlog::info(" - {}: {}", setting->key(), setting->to_string());
+			if (setting->overrides_base())
+				spdlog::info(" - {}: {} (overrides OutRun2006Tweaks.ini)", setting->key(), setting->to_string());
+			else
+				spdlog::info(" - {}: {}", setting->key(), setting->to_string());
 		}
 	}
 }

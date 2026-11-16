@@ -93,6 +93,43 @@ private:
 	int bindIndex = -1;
 	std::string bindingName;
 
+	// Wheel setup: a run of prompts, one per action, that replaces each
+	// action's joystick bindings with whatever is pressed. Empty when not
+	// running.
+	static inline const Selection WheelSetupSteps[] = {
+		{ Vol, int(ADChannel::Steering)      },
+		{ Vol, int(ADChannel::Acceleration)  },
+		{ Vol, int(ADChannel::Brake)         },
+		{ Sw,  int(SwitchId::GearUp)         },
+		{ Sw,  int(SwitchId::GearDown)       },
+		{ Sw,  int(SwitchId::Start)          },
+		{ Sw,  int(SwitchId::A)              },
+		{ Sw,  int(SwitchId::B)              },
+		{ Sw,  int(SwitchId::SelectionUp)    },
+		{ Sw,  int(SwitchId::SelectionDown)  },
+		{ Sw,  int(SwitchId::SelectionLeft)  },
+		{ Sw,  int(SwitchId::SelectionRight) },
+		{ Sw,  int(SwitchId::Y)              },
+	};
+	int wheelSetupStep = -1;
+
+	bool wheelSetupRunning() const { return wheelSetupStep >= 0; }
+
+	void wheel_setup_next()
+	{
+		wheelSetupStep++;
+		if (wheelSetupStep >= int(std::size(WheelSetupSteps)))
+		{
+			wheelSetupStep = -1;
+			isListeningForInput = ListenState::False;
+			return;
+		}
+
+		const Selection& step = WheelSetupSteps[wheelSetupStep];
+		selected = step;
+		begin_listening(step, -1);
+	}
+
 	// Track binding changes (options tab are handled differently)
 	bool unsavedChanges = false;
 	bool confirmingReset = false;
@@ -140,6 +177,24 @@ public:
 		InputAction& action = action_for(bindTarget);
 		auto& bindings = action.bindings();
 
+		if (wheelSetupRunning())
+		{
+			// Escape skips one step, Delete abandons the rest.
+			if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+			{
+				ImGui::CloseCurrentPopup();
+				wheel_setup_next();
+				return false;
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))
+			{
+				wheelSetupStep = -1;
+				isListeningForInput = ListenState::False;
+				ImGui::CloseCurrentPopup();
+				return false;
+			}
+		}
+
 		if (ImGui::IsKeyPressed(ImGuiKey_Escape))
 		{
 			isListeningForInput = ListenState::False;
@@ -163,6 +218,11 @@ public:
 		// what is already bound.
 		const auto commit = [&](const InputBinding& binding)
 		{
+			// The wheel setup replaces what the wheel had for this action, so
+			// running it twice doesn't leave two of everything.
+			if (wheelSetupRunning())
+				std::erase_if(bindings, [](const InputBinding& b) { return b.isJoystick(); });
+
 			if (bindIndex >= 0 && bindIndex < int(bindings.size()))
 				bindings[bindIndex] = binding;
 			else
@@ -171,6 +231,16 @@ public:
 			isListeningForInput = ListenState::WaitForBindButtonRelease;
 			ImGui::CloseCurrentPopup();
 		};
+
+		// Wheels, pedals and anything else SDL has no gamepad mapping for. Checked
+		// first during the wheel setup, so a key held on the side can't take a
+		// step meant for the wheel.
+		if (wheelSetupRunning())
+			if (auto binding = InputManager::instance.detectJoystickInput())
+			{
+				commit(*binding);
+				return true;
+			}
 
 		// Keyboard
 		{
@@ -213,6 +283,12 @@ public:
 					return true;
 				}
 			}
+		}
+
+		if (auto binding = InputManager::instance.detectJoystickInput())
+		{
+			commit(*binding);
+			return true;
 		}
 
 		return false;
@@ -289,7 +365,7 @@ private:
 				ImGui::TableNextColumn();
 				const std::string label = std::format("{}  ({})",
 					binding.displayName(padType, steering),
-					binding.isKeyboard() ? "keyboard" : "controller");
+					binding.isKeyboard() ? "keyboard" : binding.isJoystick() ? "wheel/joystick" : "controller");
 
 				if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0)))
 					begin_listening(selected, i);
@@ -345,11 +421,10 @@ private:
 	{
 		auto& manager = InputManager::instance;
 
+		ImGui::SeparatorText("Gamepads");
+
 		if (manager.controllers.empty())
-		{
-			ImGui::TextDisabled("No controllers detected.");
-			return;
-		}
+			ImGui::TextDisabled("No gamepads detected.");
 
 		for (size_t i = 0; i < manager.controllers.size(); i++)
 		{
@@ -362,8 +437,77 @@ private:
 			ImGui::PopID();
 		}
 
-		ImGui::Spacing();
-		ImGui::TextDisabled("Bindings apply to whichever controller is selected.");
+		if (!manager.controllers.empty())
+			ImGui::TextDisabled("Gamepad bindings apply to whichever gamepad is selected.");
+
+		draw_joysticks();
+	}
+
+	// Every wheel/joystick with what it reads right now, so it is possible to
+	// see which axis is which before binding anything.
+	void draw_joysticks()
+	{
+		auto& manager = InputManager::instance;
+		const auto& joysticks = manager.connectedJoysticks();
+
+		ImGui::SeparatorText("Wheels and joysticks");
+
+		if (joysticks.empty())
+		{
+			ImGui::TextDisabled("None detected. If a wheel is plugged in, try another InputBackend.");
+			return;
+		}
+
+		if (ImGui::Button("Set up wheel..."))
+		{
+			wheelSetupStep = -1;
+			wheel_setup_next();
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Asks for steering, pedals, gears and menu buttons in turn.\n"
+				"Replaces the wheel bindings of each action it asks about; keyboard and gamepad bindings stay.");
+
+		for (size_t j = 0; j < joysticks.size(); j++)
+		{
+			SDL_Joystick* joystick = joysticks[j];
+			const char* name = SDL_GetJoystickName(joystick);
+
+			ImGui::PushID(int(j));
+			const std::string header = std::format("{} ({:04x}:{:04x})###joy",
+				name ? name : "Joystick", SDL_GetJoystickVendor(joystick), SDL_GetJoystickProduct(joystick));
+
+			if (ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				const int axes = SDL_GetNumJoystickAxes(joystick);
+				for (int i = 0; i < axes; i++)
+				{
+					const Sint16 raw = SDL_GetJoystickAxis(joystick, i);
+					ImGui::ProgressBar((float(raw) + 32768.f) / 65535.f, ImVec2(-FLT_MIN, 0),
+						std::format("Axis {}: {}", i, raw).c_str());
+				}
+
+				std::string held;
+				const int buttons = SDL_GetNumJoystickButtons(joystick);
+				for (int i = 0; i < buttons; i++)
+					if (SDL_GetJoystickButton(joystick, i))
+						held += std::format("{}{}", held.empty() ? "" : ", ", i);
+				ImGui::Text("Buttons held: %s", held.empty() ? "none" : held.c_str());
+
+				const int hats = SDL_GetNumJoystickHats(joystick);
+				for (int i = 0; i < hats; i++)
+				{
+					const Uint8 hat = SDL_GetJoystickHat(joystick, i);
+					std::string dirs;
+					for (Uint8 dir : { Uint8(SDL_HAT_UP), Uint8(SDL_HAT_DOWN), Uint8(SDL_HAT_LEFT), Uint8(SDL_HAT_RIGHT) })
+						if (hat & dir)
+							dirs += std::format("{}{}", dirs.empty() ? "" : "+", InputBinding::hatDirName(dir));
+					ImGui::Text("D-Pad %d: %s", i, dirs.empty() ? "centred" : dirs.c_str());
+				}
+
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
 	}
 
 	// These are tweaks settings rather than bindings, so they go to the tweaks INI
@@ -426,23 +570,44 @@ private:
 		if (isListeningForInput == ListenState::WaitForButtonRelease)
 		{
 			if (!manager.anyInputPressed())
+			{
+				// Taken once everything is let go, so it records the wheel
+				// centred and the pedals up.
+				manager.snapshotJoystickAxes();
 				isListeningForInput = ListenState::Listening;
+			}
 			return;
 		}
 
 		if (isListeningForInput == ListenState::WaitForBindButtonRelease)
 		{
 			if (!manager.anyInputPressed())
-				isListeningForInput = ListenState::False;
+			{
+				if (wheelSetupRunning())
+					wheel_setup_next();
+				else
+					isListeningForInput = ListenState::False;
+			}
 			return;
 		}
 
 		ImGui::OpenPopup("Listening for Input");
 		if (ImGui::BeginPopupModal("Listening for Input", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
-			ImGui::Text("Press any input to bind to %s", bindingName.c_str());
+			if (wheelSetupRunning())
+				ImGui::TextDisabled("Wheel setup, step %d of %d", wheelSetupStep + 1, int(std::size(WheelSetupSteps)));
+
+			if (is_steering(bindTarget))
+				ImGui::Text("Turn the wheel (or push the stick) to the right to bind %s", bindingName.c_str());
+			else if (bindTarget.isVolume())
+				ImGui::Text("Press the pedal (or input) to bind to %s", bindingName.c_str());
+			else
+				ImGui::Text("Press any input to bind to %s", bindingName.c_str());
 			ImGui::Spacing();
-			ImGui::TextDisabled("Escape to cancel, Delete to clear");
+			if (wheelSetupRunning())
+				ImGui::TextDisabled("Escape to skip this one, Delete to stop the setup");
+			else
+				ImGui::TextDisabled("Escape to cancel, Delete to clear");
 
 			if (HandleNewBinding())
 				unsavedChanges = true;
@@ -586,6 +751,8 @@ public:
 
 		if (!dialogOpen)
 		{
+			wheelSetupStep = -1;
+			isListeningForInput = ListenState::False;
 			Overlay::IsBindingDialogActive = false;
 			Overlay::RequestMouseHide = true;
 			confirmingReset = false;

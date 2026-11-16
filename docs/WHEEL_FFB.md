@@ -70,19 +70,37 @@ The DirectInput device with force feedback whose name contains `WheelFFBDevice`;
 Logitech PRO Racing Wheel (046d:c272 Xbox/PC, 046d:c268 and c269 PlayStation/PC) if one is connected,
 else the first force feedback device. It is opened exclusively with the game's window and its
 auto-centre switched off. Logitech wheels give DirectInput force feedback through G HUB's driver, so
-G HUB has to be installed.
+G HUB has to be installed. If none is found it is looked for again every half minute. The log
+(`OutRun2006Tweaks.log`) says which device was used, or why none was.
 
-Two things about the game's own controls:
+## Driving with the wheel
 
-- The mod's new input system (`UseNewInput`, on by default) only opens SDL gamepads, and SDL doesn't
-  treat a racing wheel as one: with it on, the wheel neither steers nor works the pedals. Driving with
-  a wheel takes `UseNewInput = false`, the game's own DirectInput controls.
-- The game opens each controller with `DISCL_EXCLUSIVE | DISCL_FOREGROUND` (0x402E40), and DirectInput
-  gives a device one exclusive owner, which force feedback needs. With `WheelFFB` on (read at start-up),
-  that call is patched to `DISCL_NONEXCLUSIVE | DISCL_FOREGROUND`: the game reads the wheel the same
-  way, and the exclusive handle is the force feedback's. The game sends no force feedback itself. If none is found it is
-looked for again every half minute. The log (`OutRun2006Tweaks.log`) says which device was used, or
-why none was.
+The force feedback only pushes the wheel; reading it is up to the input system in use.
+
+- **New input (`UseNewInput = true`, the default).** SDL has no gamepad mapping for a wheel, so it is
+  opened as a joystick (each one is logged with its axes, buttons and hats) and bound like anything
+  else in the binding dialog (in-game Controls > Configuration, or F11 > Controls > Configure Input
+  Bindings). The Controllers tab shows every joystick's axes, buttons and D-pads live, and
+  *Set up wheel...* asks for steering, accelerator, brake, gears, Start, A, B, the four menu
+  directions and Y in turn (Escape skips one, Delete stops). A captured axis that was resting near
+  one end of its range is taken as a pedal and reads 0..1 from that end; any other axis is centred,
+  positive in the direction it was moved. Bindings go in the `[Joystick]` section of the bindings
+  INI, named by USB vendor:product (`046d:c272 Axis0`, `046d:c272 Axis1 FullInv`,
+  `046d:c272 Button4`, `046d:c272 Hat0 Up`). There is no deadzone on a centred joystick axis; pedals
+  get 2% at rest. `BypassGameSensitivity` passes steering straight through instead of through the
+  game's own steering curve.
+  Keep `InputBackend` at 0 (Windows.Gaming.Input): SDL's DirectInput backend acquires force feedback
+  devices exclusively (`DISCL_EXCLUSIVE | DISCL_BACKGROUND`), as `WheelFFB` does, and a DirectInput
+  device has one exclusive owner.
+- **The game's own controls (`UseNewInput = false`).** The game reads one DirectInput controller
+  (`c_dfDIJoystick`, 0x402900) through its own axis and button assignments, set in its control
+  options. It opens each controller with `DISCL_EXCLUSIVE | DISCL_FOREGROUND` (0x402E40); with
+  `WheelFFB` on (read at start-up) that call is patched to `DISCL_NONEXCLUSIVE | DISCL_FOREGROUND`, so
+  the game reads the wheel the same way and the exclusive handle is the force feedback's. The game
+  sends no force feedback itself.
+
+Settings: `OutRun2006Tweaks.user.ini` is read after `OutRun2006Tweaks.ini` and wins. The log marks
+every setting the user INI (or the command line) changed with "(overrides OutRun2006Tweaks.ini)".
 
 ## Not done
 
