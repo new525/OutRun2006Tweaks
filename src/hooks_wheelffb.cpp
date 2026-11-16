@@ -265,7 +265,8 @@ namespace
 	// DirectInput force feedback device
 	// ---------------------------------------------------------------------------------------------
 	DIOBJECTDATAFORMAT s_axisFormat[] = {
-		{ &GUID_XAxis, 0, DIDFT_OPTIONAL | DIDFT_AXIS | DIDFT_ANYINSTANCE, DIDOI_ASPECTPOSITION },
+		// 0x80000000: DIDFT_OPTIONAL (as in the SDK's c_dfDIJoystick; the Windows SDK's dinput.h lacks the name)
+		{ &GUID_XAxis, 0, 0x80000000 | DIDFT_AXIS | DIDFT_ANYINSTANCE, DIDOI_ASPECTPOSITION },
 	};
 	DIDATAFORMAT s_dataFormat = { sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_ABSAXIS, 4, 1, s_axisFormat };
 
@@ -527,8 +528,8 @@ namespace
 		}
 
 		// the level moves towards its target at the arcade's rates (rising slowly, falling fast)
-		if (s_shownLevel16 < target * 16) s_shownLevel16 = std::min(target * 16, s_shownLevel16 + arc.rateUp);
-		else if (s_shownLevel16 > target * 16) s_shownLevel16 = std::max(target * 16, s_shownLevel16 - arc.rateDown);
+		if (s_shownLevel16 < target * 16) s_shownLevel16 = (std::min)(target * 16, s_shownLevel16 + arc.rateUp);
+		else if (s_shownLevel16 > target * 16) s_shownLevel16 = (std::max)(target * 16, s_shownLevel16 - arc.rateDown);
 
 		const float master = Settings::WheelFFBStrength / 100.f;
 		const LONG spring = LONG(DI_FFNOMINALMAX * master * (Settings::WheelFFBSpring / 100.f) * (s_shownLevel16 / (15.f * 16.f)));
