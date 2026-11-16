@@ -68,6 +68,9 @@ class Vibration : public Hook
         SetVibration(0, VibrationLeftMotor, VibrationRightMotor);
 
         GamePlCar_Ctrl.call(car);
+
+        void WheelFFB_Tick(EVWORK_CAR* car);
+        WheelFFB_Tick(car);   // steering wheel force feedback (hooks_wheelffb.cpp), on the car as this tick left it
     }
 
 public:

@@ -42,6 +42,7 @@ Online games are regularly setup on the **OutRun2006Tweaks Discord**: https://di
 - Points game toward new online servers, restoring the online multiplayer modes
 - Restored XInput rumble code from the Xbox release can be enabled inside INI, allowing gear shifts/drifts/crashes/etc to give feedback
 - Xbox Series impulse triggers are supported and can be tweaked inside INI
+- Steering wheel force feedback ported from the arcade release (OutRun 2 SP SDX): the steering weight follows the front tyres' grip and lightens in a drift, and the arcade's own jolts and rumbles play on wall hits, car contact and surface changes (`WheelFFB` in INI, see [docs/WHEEL_FFB.md](docs/WHEEL_FFB.md))
 - Steering deadzone can be customized from the default 20%
 - Horn button can be made functional during normal gameplay, outside of the "honk your horn!" girl requests
 - Allows randomizing the set of highway animations to use, instead of only using the set for the game mode being played
