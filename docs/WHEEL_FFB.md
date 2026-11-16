@@ -66,8 +66,11 @@ The level, the rates and the patterns are the arcade's; the scales are settings 
 
 ## Device
 
-The first DirectInput device with force feedback, or the one whose name contains `WheelFFBDevice`, is
-opened exclusively with the game's window and its auto-centre switched off. If none is found it is
+The DirectInput device with force feedback whose name contains `WheelFFBDevice`; with it empty, a
+Logitech PRO Racing Wheel (046d:c272 Xbox/PC, 046d:c268 and c269 PlayStation/PC) if one is connected,
+else the first force feedback device. It is opened exclusively with the game's window and its
+auto-centre switched off. Logitech wheels give DirectInput force feedback through G HUB's driver, so
+G HUB has to be installed. If none is found it is
 looked for again every half minute. The log (`OutRun2006Tweaks.log`) says which device was used, or
 why none was.
 

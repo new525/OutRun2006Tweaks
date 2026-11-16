@@ -41,7 +41,8 @@ namespace Settings
 		"weight follows the front tyres' grip and lightens in a drift, and the arcade's own jolts and rumbles "
 		"play on wall hits, contact with other cars and surface changes. Needs a DirectInput force feedback wheel." };
 	Setting<std::string> WheelFFBDevice{ "Controls", "WheelFFBDevice", "",
-		"Part of the force feedback device's name to use (empty: the first force feedback device found)." };
+		"Part of the force feedback device's name to use (empty: a Logitech PRO Racing Wheel if one is connected, "
+		"else the first force feedback device found)." };
 	Setting<int> WheelFFBStrength{ "Controls", "WheelFFBStrength", 70,
 		"Overall force feedback strength, 0-100.", Range<int>{ 0, 100 } };
 	Setting<int> WheelFFBSpring{ "Controls", "WheelFFBSpring", 100,
@@ -282,12 +283,23 @@ namespace
 
 	GUID s_found;
 	bool s_haveFound = false;
+	bool s_foundPreferred = false;
+
+	// Wheels picked ahead of other force feedback devices when WheelFFBDevice is empty (a wheel and,
+	// say, a force feedback pad both connected): vendor, product
+	const uint16_t PREFERRED[][2] = {
+		{ 0x046d, 0xc272 },   // Logitech PRO Racing Wheel, Xbox/PC
+		{ 0x046d, 0xc268 },   // Logitech PRO Racing Wheel, PlayStation/PC (PC mode)
+		{ 0x046d, 0xc269 },   // Logitech PRO Racing Wheel, PlayStation/PC (PlayStation mode)
+	};
 
 	BOOL CALLBACK EnumFFDevice(const DIDEVICEINSTANCEA* inst, void*)
 	{
 		const std::string& want = Settings::WheelFFBDevice.get();
 		std::string name = inst->tszProductName;
-		spdlog::info("WheelFFB: force feedback device \"{}\"", name);
+		// DirectInput's product GUID for a USB device starts with MAKELONG(vendor, product)
+		const uint16_t vendor = LOWORD(inst->guidProduct.Data1), product = HIWORD(inst->guidProduct.Data1);
+		spdlog::info("WheelFFB: force feedback device \"{}\" ({:04x}:{:04x})", name, vendor, product);
 		if (!want.empty())
 		{
 			std::string a = name, b = want;
@@ -295,11 +307,23 @@ namespace
 			std::transform(b.begin(), b.end(), b.begin(), ::tolower);
 			if (a.find(b) == std::string::npos)
 				return DIENUM_CONTINUE;
+			s_found = inst->guidInstance;
+			s_haveFound = true;
+			d.name = name;
+			return DIENUM_STOP;
 		}
-		s_found = inst->guidInstance;
-		s_haveFound = true;
-		d.name = name;
-		return DIENUM_STOP;
+		bool preferred = false;
+		for (const auto& id : PREFERRED)
+			preferred |= id[0] == vendor && id[1] == product;
+		// the first device, unless a preferred wheel turns up later
+		if (!s_haveFound || (preferred && !s_foundPreferred))
+		{
+			s_found = inst->guidInstance;
+			s_haveFound = true;
+			s_foundPreferred = preferred;
+			d.name = name;
+		}
+		return DIENUM_CONTINUE;
 	}
 
 	IDirectInputEffect* CreateEffect(REFGUID type, void* params, DWORD paramSize, DWORD duration)
@@ -341,7 +365,7 @@ namespace
 		if (!di || !hwnd)
 			return false;
 
-		s_haveFound = false;
+		s_haveFound = s_foundPreferred = false;
 		di->EnumDevices(DI8DEVCLASS_GAMECTRL, EnumFFDevice, nullptr, DIEDFL_ATTACHEDONLY | DIEDFL_FORCEFEEDBACK);
 		if (!s_haveFound)
 		{
