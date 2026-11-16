@@ -70,7 +70,17 @@ The DirectInput device with force feedback whose name contains `WheelFFBDevice`;
 Logitech PRO Racing Wheel (046d:c272 Xbox/PC, 046d:c268 and c269 PlayStation/PC) if one is connected,
 else the first force feedback device. It is opened exclusively with the game's window and its
 auto-centre switched off. Logitech wheels give DirectInput force feedback through G HUB's driver, so
-G HUB has to be installed. If none is found it is
+G HUB has to be installed.
+
+Two things about the game's own controls:
+
+- The mod's new input system (`UseNewInput`, on by default) only opens SDL gamepads, and SDL doesn't
+  treat a racing wheel as one: with it on, the wheel neither steers nor works the pedals. Driving with
+  a wheel takes `UseNewInput = false`, the game's own DirectInput controls.
+- The game opens each controller with `DISCL_EXCLUSIVE | DISCL_FOREGROUND` (0x402E40), and DirectInput
+  gives a device one exclusive owner, which force feedback needs. With `WheelFFB` on (read at start-up),
+  that call is patched to `DISCL_NONEXCLUSIVE | DISCL_FOREGROUND`: the game reads the wheel the same
+  way, and the exclusive handle is the force feedback's. The game sends no force feedback itself. If none is found it is
 looked for again every half minute. The log (`OutRun2006Tweaks.log`) says which device was used, or
 why none was.
 

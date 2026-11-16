@@ -595,10 +595,25 @@ public:
 	{
 		// the strengths are read every tick; the device is looked for again when the name changes
 		Settings::WheelFFBDevice.watch([] { Close(); d.retryTicks = 0; });
+		// the game opens its controllers at start-up (see apply)
+		Settings::WheelFFB.needs_restart();
 	}
 
 	bool apply() override
 	{
+		// The game opens each controller with SetCooperativeLevel(hwnd, DISCL_EXCLUSIVE | DISCL_FOREGROUND)
+		// (0x402E40: push 5). Force feedback needs an exclusive handle, and DirectInput gives one device a
+		// single exclusive owner, so with the game holding the wheel ours could not acquire it. The game
+		// sends no force feedback of its own: it opens them non-exclusive instead (push 6), which reads the
+		// same, and the exclusive handle is ours.
+		if (Settings::WheelFFB)
+		{
+			uint8_t* push = Module::exe_ptr(0x2F1B);
+			if (push && push[0] == 0x6A && push[1] == 0x05)
+				Memory::VP::Patch<uint8_t>(push + 1, uint8_t(DISCL_NONEXCLUSIVE | DISCL_FOREGROUND));
+			else
+				spdlog::warn("WheelFFB: the game's controller open code is not as expected; it keeps its exclusive access");
+		}
 		return true;
 	}
 
