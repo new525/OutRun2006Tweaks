@@ -6,6 +6,7 @@
 #include <fstream>
 #include <algorithm>
 #include <random>
+#include <cctype>
 
 namespace Settings
 {
@@ -32,7 +33,8 @@ namespace Settings
 	Setting<int> CDSwitcherTitlePositionY{ "CDSwitcher", "SwitcherTitlePositionY", 450,
 		"Where the track title is drawn on screen, based on games original 640x480 screen dimensions." };
 	Setting<bool> CDSwitcherShuffleTracks{ "CDSwitcher", "SwitcherShuffleTracks", false,
-		"Shuffles the tracks on game launch." };
+		"Shuffles the order the CD switcher steps through the tracks in, on game launch. "
+		"The track picked in the music menu still plays at the start of a race." };
 }
 
 std::string BGMOverridePath;
@@ -132,6 +134,60 @@ class CDSwitcher : public Hook
 	inline static bool PrevKeyStatePrev = false;
 	inline static bool PrevKeyStateNext = false;
 
+	// The game's own music list, in its music menu's order, as read by its BGM
+	// loader (0x42FBA0). Entries 28 and 29 are LAST_WAVE and SEGA441, which the
+	// menu doesn't offer.
+	constexpr static int GameBgmTable_Addr = 0x371AD8;
+	constexpr static uint32_t GameBgmCount = 28;
+
+	// Position in Settings::CDTracks of what's playing, -1 if the CD list
+	// doesn't have it. Kept apart from sel_bgm_kind_buf, which is the music
+	// menu's choice: the two only line up when CDTracks is in the game's order,
+	// and the shuffle option or extra tracks at the top of the list break that.
+	inline static int CurrentCDTrack = -1;
+
+	static std::string lowerStem(const std::string& path)
+	{
+		std::string stem = std::filesystem::path(path).stem().string();
+		std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+		return stem;
+	}
+
+	static const char* gameBgmFile(uint32_t bgmIdx)
+	{
+		if (bgmIdx >= GameBgmCount)
+			return nullptr;
+		return Module::exe_ptr<const char*>(GameBgmTable_Addr)[bgmIdx];
+	}
+
+	// The CDTracks entry with the same file name (ignoring folder, extension
+	// and case) as the game's own track, so "01_Splash_wave.FLAC" stands in for
+	// "01_Splash_wave.ogg".
+	static int cdTrackForGameBgm(uint32_t bgmIdx)
+	{
+		const char* gameFile = gameBgmFile(bgmIdx);
+		if (!gameFile)
+			return -1;
+
+		const std::string stem = lowerStem(gameFile);
+		for (size_t i = 0; i < Settings::CDTracks.size(); i++)
+			if (lowerStem(Settings::CDTracks[i].first) == stem)
+				return int(i);
+		return -1;
+	}
+
+	static int gameBgmForCDTrack(int cdTrack)
+	{
+		if (cdTrack < 0 || cdTrack >= int(Settings::CDTracks.size()))
+			return -1;
+
+		const std::string stem = lowerStem(Settings::CDTracks[cdTrack].first);
+		for (uint32_t i = 0; i < GameBgmCount; i++)
+			if (const char* gameFile = gameBgmFile(i); gameFile && lowerStem(gameFile) == stem)
+				return int(i);
+		return -1;
+	}
+
 	// Legacy input only - the new system binds ModAction::MusicNext/Previous
 	// instead, which is one input per action rather than a chord.
 	static constexpr uint32_t PadButtonCombo_Next = XINPUT_GAMEPAD_BACK;
@@ -163,6 +219,10 @@ class CDSwitcher : public Hook
 			KeyStatePrev = ((GetAsyncKeyState('Z') & 1) || PadStatePrev);
 		}
 
+		if (Settings::CDTracks.empty())
+			return;
+
+		const int trackCount = int(Settings::CDTracks.size());
 		bool BGMChanged = false;
 
 		if (KeyStatePrev != PrevKeyStatePrev)
@@ -170,9 +230,9 @@ class CDSwitcher : public Hook
 			PrevKeyStatePrev = KeyStatePrev;
 			if (KeyStatePrev)
 			{
-				*Game::sel_bgm_kind_buf = *Game::sel_bgm_kind_buf - 1;
-				if (*Game::sel_bgm_kind_buf < 0)
-					*Game::sel_bgm_kind_buf = Settings::CDTracks.size() - 1;
+				CurrentCDTrack = CurrentCDTrack - 1;
+				if (CurrentCDTrack < 0 || CurrentCDTrack >= trackCount)
+					CurrentCDTrack = trackCount - 1;
 				BGMChanged = true;
 			}
 		}
@@ -181,16 +241,22 @@ class CDSwitcher : public Hook
 			PrevKeyStateNext = KeyStateNext;
 			if (KeyStateNext)
 			{
-				*Game::sel_bgm_kind_buf = *Game::sel_bgm_kind_buf + 1;
-				if (*Game::sel_bgm_kind_buf >= Settings::CDTracks.size())
-					*Game::sel_bgm_kind_buf = 0;
+				CurrentCDTrack = CurrentCDTrack + 1;
+				if (CurrentCDTrack < 0 || CurrentCDTrack >= trackCount)
+					CurrentCDTrack = 0;
 				BGMChanged = true;
 			}
 		}
 
 		if (BGMChanged)
 		{
-			BGMOverridePath = Settings::CDTracks[*Game::sel_bgm_kind_buf].first;
+			// If the game has this track too, make it the music menu's choice,
+			// so the menu shows it and the next race starts with it. A track
+			// the game doesn't have leaves the menu's choice alone.
+			if (int gameBgm = gameBgmForCDTrack(CurrentCDTrack); gameBgm >= 0)
+				*Game::sel_bgm_kind_buf = gameBgm;
+
+			BGMOverridePath = Settings::CDTracks[CurrentCDTrack].first;
 			Game::adxPlay(0, 0, 0);
 
 			SongTitleDisplayTimer = SongTitleDisplayFrames;
@@ -205,17 +271,37 @@ class CDSwitcher : public Hook
 			return;
 		}
 
-		if (bgmIdx >= Settings::CDTracks.size())
-			bgmIdx = 0;
+		// Both call sites are the game's scene commands: one plays a fixed track
+		// number, the other (the race start) the music menu's choice. Either way
+		// bgmIdx is an index into the game's own list (GameBgmTable_Addr).
+		// Play that track, taking the CD list's copy of it if there is one
+		// (the menu's preview already plays FLAC/WAV replacements by file
+		// name), rather than whatever sits at the same position in the CD
+		// list: with SwitcherShuffleTracks, or tracks added at the top of the
+		// list, that is a different song.
+		if (bgmIdx < GameBgmCount)
+		{
+			CurrentCDTrack = cdTrackForGameBgm(bgmIdx);
+			if (CurrentCDTrack >= 0)
+			{
+				BGMOverridePath = Settings::CDTracks[CurrentCDTrack].first;
+				Game::adxPlay(0, 0, 0);
+			}
+			else
+				Game::adxPlay(a1, bgmIdx, a3); // not in the CD list: the game's own file
+			return;
+		}
 
-		BGMOverridePath = Settings::CDTracks[bgmIdx].first;
-		Game::adxPlay(0, 0, 0);
+		// Past the menu's music: a scene asking for LAST_WAVE or SEGA441 by
+		// number. Nothing in the CD list stands in for those.
+		CurrentCDTrack = -1;
+		Game::adxPlay(a1, bgmIdx, a3);
 	}
 
 public:
 	static void draw(int numUpdates)
 	{
-		if (SongTitleDisplayTimer > 0 && *Game::sel_bgm_kind_buf < Settings::CDTracks.size())
+		if (SongTitleDisplayTimer > 0 && CurrentCDTrack >= 0 && CurrentCDTrack < int(Settings::CDTracks.size()))
 		{
 			Game::sprSetFontPriority(4);
 			Game::sprSetPrintFont(Settings::CDSwitcherTitleFont);
@@ -232,8 +318,8 @@ public:
 			}
 			Game::sprSetFontColor(color);
 
-			const auto& song = Settings::CDTracks[*Game::sel_bgm_kind_buf].second;
-			Game::sprPrintf("#%02d. %s", (*Game::sel_bgm_kind_buf) + 1, song.c_str());
+			const auto& song = Settings::CDTracks[CurrentCDTrack].second;
+			Game::sprPrintf("#%02d. %s", CurrentCDTrack + 1, song.c_str());
 
 			SongTitleDisplayTimer -= numUpdates;
 			if (SongTitleDisplayTimer <= 0)
